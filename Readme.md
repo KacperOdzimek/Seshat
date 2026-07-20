@@ -1,6 +1,6 @@
 # Seshat
 
-File format, somewhat like JSON, but binary. Good for application assets archives. Supports compression and encryption.
+File format, somewhat like JSON, but binary. Good for application assets archives. Supports compression.
 
 ## General Format
 
@@ -8,8 +8,8 @@ File format, somewhat like JSON, but binary. Good for application assets archive
 
 This apply to entire file:
 ```
-Endian: Little
-Double: IEEE 754 binary64
+Endian:  Little
+Float64: IEEE 754 binary64
 ```
 
 ## Header
@@ -22,6 +22,7 @@ Align:          8 bytes
 ```
 ```
 uint64 version      // Future-proof as for today only 0
+uint64 magic        // Magic value, ascii encoded text "SESHAT!?"
 uint32 index        // Index bytes
 uint32 names        // Names bytes
 uint64 content      // Content bytes
@@ -91,9 +92,9 @@ uint64 bytes    // Archive length
 int64 value     // Single int64 value
 ```
 
-### 2: Double
+### 2: Float64
 ```
-double value    // Single 8 bytes double
+float64 value    // Single float64 value
 ```
 
 ### 3: UTF-8 Text
@@ -117,6 +118,3 @@ Following flags exists (numered by bit from LSB):
 
 Data is compressed with Seshat-Compression algorithm.
 
-### 1: Encrypted
-
-Data is encrypted with Seshat-Encryption algorithm.
