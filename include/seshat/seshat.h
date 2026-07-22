@@ -57,34 +57,35 @@ typedef enum sht_type {
 // Status Codes
 
 typedef enum sht_status {
-    sht_status_ok = 0,
-    sht_status_err_bad_file,
-    sht_status_err_bad_entry,
-    sht_status_err_missing_out,
-    sht_status_err_allocation_failure,
-    sht_status_err_duplicate_names,
-    sht_status_err_not_found,
-    sht_status_err_type_mismatch,
-    sht_status_err_buffer_too_small,
-    sht_status_err_name_too_long
+    sht_status_ok = 0,                  // Operation succeeded
+    sht_status_err_bad_file,            // File is malformed
+    sht_status_err_bad_entry,           // Entry of index does not exist
+    sht_status_err_bad_version,         // Viewed file has version != 0
+    sht_status_err_bad_output,          // Output pointer is NULL
+    sht_status_err_allocation_failure,  // Failed to allocate
+    sht_status_err_duplicate_names,     // Two entries with same name were added
+    sht_status_err_not_found,           // Entry of name was not found
+    sht_status_err_type_mismatch,       // Bad get operation, entry is not of this type
+    sht_status_err_buffer_too_small,    // Buffer is to small to hold decompressed data
+    sht_status_err_name_too_long,       // Given name is longer than 255 characters
 } sht_status;
 
 // ===========================
 // Memory access
 
 typedef enum sht_access {
-    sht_access_claim_ownership,
-    sht_access_read_unowned,
-    sht_access_make_copy
+    sht_access_claim_ownership,         // Given memory is claimed by API, and freed with the object
+    sht_access_read_unowned,            // Given memory is read but is not freed with the object
+    sht_access_make_copy                // Given memory is copied, and the copy is freed with the object
 } sht_access;
 
 // ===========================
 // Viewer
 
 typedef struct sht_view_create_info {
-    sht_access  access;
-    const void* buffer;
-    uint64_t    bytes;
+    sht_access  access;     // Buffer access profile
+    const void* buffer;     // File data buffer
+    uint64_t    bytes;      // File data bytes
 } sht_view_create_info;
 
 typedef struct sht_view sht_view;
@@ -128,7 +129,7 @@ sht_status sht_view_get_as_uncompressed_size(
     sht_view*, uint32_t entry, uint64_t* out_bytes
 );
 
-// Decompresses a TEXT_compressed / BINARY_compressed entry into a caller-supplied buffer.
+// Decompresses a text_compressed / binary_compressed entry into a caller-supplied buffer.
 sht_status sht_view_get_as_decompress(
     sht_view*, uint32_t entry, uint64_t out_buf_size, void* out_buf
 );
@@ -190,16 +191,29 @@ sht_status sht_builder_serialize(
 #include <zstd.h>
 
 // ===========================
+// Asssert
+
+#include <float.h>
+
+#if DBL_MANT_DIG != 53
+#error "Requires IEEE-754 binary64 double"
+#endif
+
+#if DBL_MAX_EXP != 1024
+#error "Requires IEEE-754 binary64 double"
+#endif
+
+// Assert on 32 bit machines, seshat requires 64 bit.
+typedef char static_assert_pointer_size[(sizeof(void*) == 8) ? 1 : -1];
+
+// ===========================
 // Constant
 
 #define HEADER_BYTES 32u
-
 #define LAST_TYPE sht_type_binary_compressed
-
 static const uint8_t MAGIC_VALUE[8] = {
     'S','E','S','H','A','T','!','?'
 };
-
 
 // ===========================
 // Helpers
@@ -213,15 +227,11 @@ static inline uint64_t align8(uint64_t x) {
 
 static inline uint32_t read_le32(const void* p) {
     const uint8_t* b = (const uint8_t*)p;
-    return  (uint32_t)b[0]         |
-            ((uint32_t)b[1] << 8)  |
-            ((uint32_t)b[2] << 16) |
-            ((uint32_t)b[3] << 24);
+    return  (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
 }
  
 static inline uint64_t read_le64(const void* p) {
-    const uint8_t* b = (const uint8_t*)p;
-    uint64_t v = 0;
+    const uint8_t* b = (const uint8_t*)p; uint64_t v = 0;
     for (int i = 7; i >= 0; i--) v = (v << 8) | (uint64_t)b[i];
     return v;
 }
@@ -242,13 +252,11 @@ static inline double read_le_double(const void* p) {
 // Little endian writes
 
 static inline void write_le32(uint8_t* dst, uint64_t* pos, uint32_t value) {
-    for (int i = 0; i < 4; ++i) dst[*pos + i] = (uint8_t)(value >> (8 * i));
-    *pos += 4;
+    for (int i = 0; i < 4; ++i) dst[*pos + i] = (uint8_t)(value >> (8 * i)); *pos += 4;
 }
 
 static inline void write_le64(uint8_t* dst, uint64_t* pos, uint64_t value) {
-    for (int i = 0; i < 8; ++i) dst[*pos + i] = (uint8_t)(value >> (8 * i));
-    *pos += 8;
+    for (int i = 0; i < 8; ++i) dst[*pos + i] = (uint8_t)(value >> (8 * i)); *pos += 8;
 }
 
 static inline void write_le64_signed(uint8_t* result, uint64_t* position, int64_t value) {
@@ -283,10 +291,10 @@ static int name_comp(uint8_t a_length, const uint8_t* a, uint8_t b_length, const
 // Viewer
 
 struct sht_view {
-    sht_access  access;
+    sht_access  access;         // Buffer access
 
-    const void* buffer;
-    uint64_t    bytes;
+    const void* buffer;         // File data buffer
+    uint64_t    bytes;          // File data length
 
     uint32_t    index_count;    // Number of index entries
     uint64_t    index_begin;    // Always 32 (sizeof header)
@@ -298,6 +306,7 @@ struct sht_view {
     uint64_t    content_bytes;  // Content section size in bytes
 };
  
+// View entry as per spec
 typedef struct view_entry {
     uint32_t    name_offset;
     uint32_t    type;
@@ -305,6 +314,7 @@ typedef struct view_entry {
     uint64_t    data_offset;
 } view_entry;
 
+// With assumption entry exists
 static inline view_entry view_read_index(const sht_view* viewer, uint32_t entry) {
     const uint8_t* p = (const uint8_t*)viewer->buffer + viewer->index_begin + (uint64_t)entry * 24;
     view_entry out = {
@@ -318,6 +328,7 @@ static inline view_entry view_read_index(const sht_view* viewer, uint32_t entry)
  
 // Gets entry's at index name
 // Returns 0 on out-of-bounds (corrupt file), 1 on success.
+// With assumption entry exists
 static inline int view_get_entry_name(const sht_view* viewer, uint32_t entry, const uint8_t** out_ptr, uint8_t* out_bytes) {
     view_entry idx = view_read_index(viewer, entry);
     if ((uint64_t)idx.name_offset >= viewer->names_bytes) return 0;
@@ -349,9 +360,9 @@ sht_status sht_create_view(sht_view** target, const sht_view_create_info* info) 
     // Magic
     if (memcmp(buf, MAGIC_VALUE, 8) != 0) return sht_status_err_bad_file;
  
-    // Version - only version 0 is understood
+    // Version - only version 0 is implemented
     uint64_t version = read_le64(buf + 8);
-    if (version != 0) return sht_status_err_bad_file;
+    if (version != 0) return sht_status_err_bad_version;
  
     uint32_t index_bytes   = read_le32(buf + 16);
     uint32_t names_bytes   = read_le32(buf + 20);
@@ -361,13 +372,13 @@ sht_status sht_create_view(sht_view** target, const sht_view_create_info* info) 
     if (index_bytes % 24 != 0) return sht_status_err_bad_file;
  
     uint64_t names_begin = (uint64_t)HEADER_BYTES + index_bytes;
-    if (names_begin < index_bytes) return sht_status_err_bad_file;     // overflow guard
+    if (names_begin < index_bytes) return sht_status_err_bad_file;      // overflow guard
  
     uint64_t content_begin = align8(names_begin + names_bytes);
-    if (content_begin < names_begin) return sht_status_err_bad_file;  // overflow guard
+    if (content_begin < names_begin) return sht_status_err_bad_file;    // overflow guard
  
     uint64_t total_size = content_begin + content_bytes;
-    if (total_size < content_begin) return sht_status_err_bad_file;    // overflow guard
+    if (total_size < content_begin) return sht_status_err_bad_file;     // overflow guard
     if (total_size > (uint64_t)info->bytes) return sht_status_err_bad_file;
  
     *target = malloc(sizeof(sht_view));
@@ -411,14 +422,14 @@ void sht_free_view(sht_view* viewer) {
  
 // Queries entries count
 sht_status sht_view_query_entry_count(sht_view* viewer, uint32_t* count) {
-    if (!count) return sht_status_err_missing_out;
+    if (!count) return sht_status_err_bad_output;
     *count = viewer->index_count;
     return sht_status_ok;
 }
  
 // Queries entry type at index
 sht_status sht_view_query_entry_type(sht_view* viewer, uint32_t entry, sht_type* out_type) {
-    if (!out_type)                      return sht_status_err_missing_out;
+    if (!out_type)                      return sht_status_err_bad_output;
     if (entry >= viewer->index_count)   return sht_status_err_bad_entry;
  
     view_entry idx = view_read_index(viewer, entry);
@@ -431,7 +442,7 @@ sht_status sht_view_query_entry_type(sht_view* viewer, uint32_t entry, sht_type*
 // Binary search entry by name (index is guaranteed sorted lexicographically per spec)
 sht_status sht_view_find(sht_view* viewer, const char* name, uint32_t* out) {
     if (!name) return sht_status_err_not_found;
-    if (!out)  return sht_status_err_missing_out;
+    if (!out)  return sht_status_err_bad_output;
 
     size_t length = strlen(name);
     if (length > 255) return sht_status_err_name_too_long;
@@ -454,9 +465,9 @@ sht_status sht_view_find(sht_view* viewer, const char* name, uint32_t* out) {
  
     return sht_status_err_not_found;
 }
- 
+
 sht_status sht_view_get_as_int64(sht_view* viewer, uint32_t entry, int64_t* out) {
-    if (!out)                           return sht_status_err_missing_out;      // Ensure out
+    if (!out)                           return sht_status_err_bad_output;       // Ensure out
     if (entry >= viewer->index_count)   return sht_status_err_bad_entry;        // Ensure entry
  
     view_entry idx = view_read_index(viewer, entry);
@@ -469,7 +480,7 @@ sht_status sht_view_get_as_int64(sht_view* viewer, uint32_t entry, int64_t* out)
 }
  
 sht_status sht_view_get_as_float64(sht_view* viewer, uint32_t entry, double* out) {
-    if (!out)                           return sht_status_err_missing_out;      // Ensure out
+    if (!out)                           return sht_status_err_bad_output;      // Ensure out
     if (entry >= viewer->index_count)   return sht_status_err_bad_entry;        // Ensure entry
  
     view_entry idx = view_read_index(viewer, entry);
@@ -483,7 +494,7 @@ sht_status sht_view_get_as_float64(sht_view* viewer, uint32_t entry, double* out
  
 // Zero-copy: hands back a pointer straight into the source buffer, no allocation
 sht_status sht_view_get_as_bytes(sht_view* viewer, uint32_t entry, uint64_t* out_bytes, const uint8_t** out_ptr) {
-    if (!out_bytes || !out_ptr)         return sht_status_err_missing_out;      // Ensure out
+    if (!out_bytes || !out_ptr)         return sht_status_err_bad_output;      // Ensure out
     if (entry >= viewer->index_count)   return sht_status_err_bad_entry;        // Ensure entry
  
     view_entry idx = view_read_index(viewer, entry);
@@ -496,7 +507,7 @@ sht_status sht_view_get_as_bytes(sht_view* viewer, uint32_t entry, uint64_t* out
  
 // Reads the uncompressed size prefix without decompressing anything
 sht_status sht_view_get_as_uncompressed_size(sht_view* viewer, uint32_t entry, uint64_t* out_bytes) {
-    if (!out_bytes)                     return sht_status_err_missing_out;  // Ensure out
+    if (!out_bytes)                     return sht_status_err_bad_output;  // Ensure out
     if (entry >= viewer->index_count)   return sht_status_err_bad_entry;    // Ensure entry
  
     view_entry idx = view_read_index(viewer, entry);
@@ -510,7 +521,7 @@ sht_status sht_view_get_as_uncompressed_size(sht_view* viewer, uint32_t entry, u
  
 // Decompresses fresh into the caller-supplied buffer every call - result is never cached
 sht_status sht_view_get_as_decompress(sht_view* viewer, uint32_t entry, uint64_t out_buf_size, void* out_buf) {
-    if (!out_buf)                       return sht_status_err_missing_out;  // Ensure out
+    if (!out_buf)                       return sht_status_err_bad_output;  // Ensure out
     if (entry >= viewer->index_count)   return sht_status_err_bad_entry;    // Ensure entry
  
     view_entry idx = view_read_index(viewer, entry);
@@ -555,7 +566,7 @@ struct sht_builder {
 };
 
 sht_status sht_create_builder(sht_builder** target) {
-    if (!target) return sht_status_err_missing_out;
+    if (!target) return sht_status_err_bad_output;
     *target = calloc(1, sizeof(sht_builder));
     if (!(*target)) return sht_status_err_allocation_failure;
     return sht_status_ok;
@@ -638,7 +649,6 @@ sht_status sht_builder_add_int64(
     sht_builder* builder, const char* name, int64_t value
 ) {
     builder_entry* entry; SAFE_GET_TOP_ENTRY(entry);
-    if (!entry) return sht_status_err_allocation_failure;
     
     entry->type = sht_type_int64;
     entry->value.int64 = value;
@@ -650,7 +660,6 @@ sht_status sht_builder_add_float64(
     sht_builder* builder, const char* name, double value
 ) {
     builder_entry* entry; SAFE_GET_TOP_ENTRY(entry);
-    if (!entry) return sht_status_err_allocation_failure;
     
     entry->type = sht_type_float64;
     entry->value.float64 = value;
@@ -662,10 +671,10 @@ sht_status sht_builder_add_text(
     sht_builder* builder, const char* name, uint64_t bytes, const char* text, sht_access access
 ) {
     builder_entry* entry; SAFE_GET_TOP_ENTRY(entry);
-    if (!entry) return sht_status_err_allocation_failure;
 
     entry->type = sht_type_text;
     sht_status status = link_data_block(entry, bytes, text, access);
+    if (status != sht_status_ok) return status;
 
     SAFE_ADD_SUCCESS();
 }
@@ -674,10 +683,10 @@ sht_status sht_builder_add_binary(
     sht_builder* builder, const char* name, uint64_t bytes, const void* data, sht_access access
 ) {
     builder_entry* entry; SAFE_GET_TOP_ENTRY(entry);
-    if (!entry) return sht_status_err_allocation_failure;
 
     entry->type = sht_type_binary;
     sht_status status = link_data_block(entry, bytes, data, access);
+    if (status != sht_status_ok) return status;
 
     SAFE_ADD_SUCCESS();
 }
@@ -686,7 +695,6 @@ sht_status sht_builder_add_text_compressed(
     sht_builder* builder, const char* name, uint64_t bytes, const char* text, int level
 ) {
     builder_entry* entry; SAFE_GET_TOP_ENTRY(entry);
-    if (!entry) return sht_status_err_allocation_failure;
 
     if (level <= 0) level = ZSTD_CLEVEL_DEFAULT;
     size_t bound = ZSTD_compressBound((size_t)bytes);
@@ -725,7 +733,6 @@ sht_status sht_builder_add_binary_compressed(
     int             level
 ) {
     builder_entry* entry; SAFE_GET_TOP_ENTRY(entry);
-    if (!entry) return sht_status_err_allocation_failure;
 
     if (level <= 0) level = ZSTD_CLEVEL_DEFAULT;
     size_t bound = ZSTD_compressBound((size_t)bytes);
@@ -773,6 +780,9 @@ static inline uint64_t entry_data_bytes(builder_entry* entry) {
 }
 
 sht_status sht_builder_serialize(sht_builder* builder, void** out_buffer, uint64_t* out_bytes) {
+    // Ensure output
+    if (!out_buffer || !out_bytes) return sht_status_err_bad_output;
+
     // Sort by name
     qsort(builder->entries, builder->entries_count, sizeof(builder_entry), name_comp_for_builder_entries);
 
@@ -858,7 +868,7 @@ sht_status sht_builder_serialize(sht_builder* builder, void** out_buffer, uint64
     }
 
     *out_buffer = result;
-    *out_bytes = position;
+    *out_bytes  = position;
     return sht_status_ok;
 }
 

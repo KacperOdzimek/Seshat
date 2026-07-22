@@ -11,6 +11,8 @@ This repository contains Seshat standard documents in ``formats`` folder, and a 
 Format uses uint64 for data sizes - which practically discards 32bit systems.
 The implementation also does not allow 32 bit systmes.
 
+Also implementation does not support machines that use ``double`` standard other than ``IEEE 754 binary64.``
+
 # Versions
 
 | Index | Markdown Document | Changes | Implementations |
