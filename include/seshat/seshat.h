@@ -23,6 +23,13 @@ Usage:
 Thread safety:
 - sht_view is safe for concurrent read-only access after creation
 - sht_builder is NOT thread-safe while being modified
+
+----------------------------------------------------------------
+Notes:
+- Duplicate names error is NOT returned on builder add operations, since this would require
+    checking other added names, possibly making add operations time complexity worse. Therefore
+    the error is only returned at sht_builder_serialize. This means, adding two entries with same name
+    invalidates the builder. This is not a case worth improving, since it is easy to ensure no duplicates on caller side. 
 */
 
 #ifndef SESHAT_H
