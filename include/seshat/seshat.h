@@ -7,17 +7,18 @@ This file provides a builder and zero-copy view API for the Seshat V0 format.
 Code info:
 - sht prefix
 - SESHAT_IMPL macro to build
-- libzstd >= 1.3.0 dependant
+- libzstd >= 1.5.5 dependant
 
 ----------------------------------------------------------------
 Usage:
 - sht_view:
-    - parse an existing memory buffer without copying
-    - payload data remains referenced directly from the source buffer
-    - only decompression allocates new memory
+    - create viewer over existing seshat file - you can use mmaped file memory for zero copy read
+    - query entires types, read entries values
+    - free view
 - sht_builder:
-    - build documents entry-by-entry
-    - automatically handles sorting, alignment, padding, serialization, and zstd compression
+    - build document by adding entries (ensure each have unique name, see notes)
+    - serialize document, and save to file
+    - free builder
 
 ----------------------------------------------------------------
 Thread safety:
