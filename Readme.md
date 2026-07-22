@@ -18,10 +18,7 @@ This project is licensed under MIT License. See [LICENSE.md](LICENSE.md).
 
 ## Zstandard license
 
-This project uses Zstandard (zstd), which is dual-licensed under the BSD 3-Clause License or GPLv2.
-
-Zstandard:
-https://github.com/facebook/zstd
-
+This project uses Zstandard (zstd).
 Copyright (c) Meta Platforms, Inc. and contributors.
 Licensed under the BSD 3-Clause License or GPLv2.
+Zstandard: https://github.com/facebook/zstd
