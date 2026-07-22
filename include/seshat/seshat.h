@@ -32,6 +32,7 @@ Notes:
     the error is only returned at sht_builder_serialize. This means, adding two entries with same name
     invalidates the builder. This is not a case worth improving, since it is easy to ensure no duplicates on caller side.
 - This api uses null-terminated strings for convenience (seshat files use explicit lengths).
+- API requires all strings given to "name" fields to be valid.
 */
 
 #ifndef SESHAT_H
@@ -65,6 +66,7 @@ typedef enum sht_status {
     sht_status_err_not_found,
     sht_status_err_type_mismatch,
     sht_status_err_buffer_too_small,
+    sht_status_err_name_too_long
 } sht_status;
 
 // ===========================
@@ -82,7 +84,7 @@ typedef enum sht_access {
 typedef struct sht_view_create_info {
     sht_access  access;
     const void* buffer;
-    size_t      bytes;
+    uint64_t    bytes;
 } sht_view_create_info;
 
 typedef struct sht_view sht_view;
@@ -141,7 +143,6 @@ void sht_free_builder(sht_builder*);
 // ===========================
 // Builder add operations
 // Names in following function calls are copied right-away
-// Names longer than 255 characters will be capped to this length
 
 sht_status sht_builder_add_int64(
     sht_builder*, const char* name, int64_t value
@@ -174,7 +175,7 @@ sht_status sht_builder_add_binary_compressed(
 
 // Serializes to a a new buffer; caller must free(*out_buffer) if status was sht_status_ok
 sht_status sht_builder_serialize(
-    sht_builder*, void** out_buffer, size_t* out_bytes
+    sht_builder*, void** out_buffer, uint64_t* out_bytes
 );
 
 #endif /* SESHAT_H */
@@ -186,14 +187,19 @@ sht_status sht_builder_serialize(
 
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 #include <zstd.h>
 
 // ===========================
 // Constant
 
 #define HEADER_BYTES 32u
-#define MAGIC_VALUE  (uint8_t[8]){'S', 'E', 'S', 'H', 'A', 'T', '!', '?'}
+
+#define LAST_TYPE sht_type_binary_compressed
+
+static const uint8_t MAGIC_VALUE[8] = {
+    'S','E','S','H','A','T','!','?'
+};
+
 
 // ===========================
 // Helpers
@@ -280,7 +286,7 @@ struct sht_view {
     sht_access  access;
 
     const void* buffer;
-    size_t      bytes;
+    uint64_t    bytes;
 
     uint32_t    index_count;    // Number of index entries
     uint64_t    index_begin;    // Always 32 (sizeof header)
@@ -416,7 +422,9 @@ sht_status sht_view_query_entry_type(sht_view* viewer, uint32_t entry, sht_type*
     if (entry >= viewer->index_count)   return sht_status_err_bad_entry;
  
     view_entry idx = view_read_index(viewer, entry);
+    if (idx.type > LAST_TYPE) return sht_status_err_bad_file;
     *out_type = (sht_type)idx.type;
+
     return sht_status_ok;
 }
  
@@ -425,13 +433,16 @@ sht_status sht_view_find(sht_view* viewer, const char* name, uint32_t* out) {
     if (!name) return sht_status_err_not_found;
     if (!out)  return sht_status_err_missing_out;
 
+    size_t length = strlen(name);
+    if (length > 255) return sht_status_err_name_too_long;
+
     uint32_t lo = 0, hi = viewer->index_count;
     while (lo < hi) {
         uint32_t mid = lo + (hi - lo) / 2;
         const uint8_t* mid_name; uint8_t mid_len;
 
         if (!view_get_entry_name(viewer, mid, &mid_name, &mid_len)) return sht_status_err_bad_file;
-        int cmp = name_comp(mid_len, mid_name, strlen(name), (const uint8_t*)name);
+        int cmp = name_comp(mid_len, mid_name, (uint8_t)length, (const uint8_t*)name);
 
         if (cmp == 0) {
             *out = mid;  return sht_status_ok;
@@ -544,6 +555,7 @@ struct sht_builder {
 };
 
 sht_status sht_create_builder(sht_builder** target) {
+    if (!target) return sht_status_err_missing_out;
     *target = calloc(1, sizeof(sht_builder));
     if (!(*target)) return sht_status_err_allocation_failure;
     return sht_status_ok;
@@ -564,27 +576,6 @@ void sht_free_builder(sht_builder* builder) {
     }
     free(builder->entries);
     free(builder);
-}
-
-static inline builder_entry* add_entry(sht_builder* builder, const char* name) {
-    if (builder->entries_count + 1 >= builder->entries_capacity) {
-        uint32_t new_cap = builder->entries_capacity * 2;
-        if (new_cap == 0) new_cap = 16;
-        builder_entry* new_entries = realloc(builder->entries, new_cap * sizeof(builder_entry));
-        if (!new_entries) return NULL; // Failure
-        builder->entries            = new_entries;
-        builder->entries_capacity   = new_cap;
-    }
-
-    builder_entry* entry = &builder->entries[builder->entries_count++];
-    *entry = (builder_entry){0};    // Initialize entry
-    for (int i = 0; i < 255; i++) {
-        if (name[i] == '\0') break;
-        entry->name[i] = name[i];
-        entry->name_length++;
-    }
-
-    return entry;
 }
 
 static inline sht_status link_data_block(builder_entry* entry, uint64_t bytes, const void* data, sht_access access) {
@@ -611,60 +602,90 @@ static inline sht_status link_data_block(builder_entry* entry, uint64_t bytes, c
     return sht_status_ok;
 }
 
+static inline sht_status top_entry(sht_builder* builder, const char* name, builder_entry** out_entry) {
+    if (builder->entries_count + 1 >= builder->entries_capacity) {
+        uint32_t new_cap = builder->entries_capacity * 2; if (new_cap == 0) new_cap = 16;
+        builder_entry* new_entries = realloc(builder->entries, new_cap * sizeof(builder_entry));
+        if (!new_entries) return sht_status_err_allocation_failure; // Failure
+        builder->entries            = new_entries;
+        builder->entries_capacity   = new_cap;
+    }
+
+    int name_length = strlen(name);
+    if (name_length > 255) return sht_status_err_name_too_long;
+
+    builder_entry* entry = &builder->entries[builder->entries_count];
+    *entry = (builder_entry){0};    // Initialize entry
+    for (int i = 0; i < name_length; i++) {
+        if (name[i] == '\0') break;
+        entry->name[i] = name[i];
+    } entry->name_length = name_length;
+
+    *out_entry = entry; return sht_status_ok;
+}
+
+static inline void top_entry_add(sht_builder* builder) {
+    builder->entries_count++; // Make top entry actuall entry
+}
+
+#define SAFE_GET_TOP_ENTRY(entry_out_var) \
+    do {sht_status s = top_entry(builder, name, &entry); if (s != sht_status_ok) return s;} while (0);
+
+#define SAFE_ADD_SUCCESS() \
+    top_entry_add(builder); return sht_status_ok
+
 sht_status sht_builder_add_int64(
     sht_builder* builder, const char* name, int64_t value
 ) {
-    builder_entry* entry = add_entry(builder, name);
+    builder_entry* entry; SAFE_GET_TOP_ENTRY(entry);
     if (!entry) return sht_status_err_allocation_failure;
     
     entry->type = sht_type_int64;
     entry->value.int64 = value;
 
-    return sht_status_ok;
+    SAFE_ADD_SUCCESS();
 }
 
 sht_status sht_builder_add_float64(
     sht_builder* builder, const char* name, double value
 ) {
-    builder_entry* entry = add_entry(builder, name);
+    builder_entry* entry; SAFE_GET_TOP_ENTRY(entry);
     if (!entry) return sht_status_err_allocation_failure;
     
     entry->type = sht_type_float64;
     entry->value.float64 = value;
 
-    return sht_status_ok;
+    SAFE_ADD_SUCCESS();
 }
 
 sht_status sht_builder_add_text(
     sht_builder* builder, const char* name, uint64_t bytes, const char* text, sht_access access
 ) {
-    builder_entry* entry = add_entry(builder, name);
+    builder_entry* entry; SAFE_GET_TOP_ENTRY(entry);
     if (!entry) return sht_status_err_allocation_failure;
 
     entry->type = sht_type_text;
     sht_status status = link_data_block(entry, bytes, text, access);
 
-    if (status != sht_status_ok) builder->entries_count--; // remove malformed
-    return status;
+    SAFE_ADD_SUCCESS();
 }
 
 sht_status sht_builder_add_binary(
     sht_builder* builder, const char* name, uint64_t bytes, const void* data, sht_access access
 ) {
-    builder_entry* entry = add_entry(builder, name);
+    builder_entry* entry; SAFE_GET_TOP_ENTRY(entry);
     if (!entry) return sht_status_err_allocation_failure;
 
     entry->type = sht_type_binary;
     sht_status status = link_data_block(entry, bytes, data, access);
 
-    if (status != sht_status_ok) builder->entries_count--; // remove malformed
-    return status;
+    SAFE_ADD_SUCCESS();
 }
 
 sht_status sht_builder_add_text_compressed(
     sht_builder* builder, const char* name, uint64_t bytes, const char* text, int level
 ) {
-    builder_entry* entry = add_entry(builder, name);
+    builder_entry* entry; SAFE_GET_TOP_ENTRY(entry);
     if (!entry) return sht_status_err_allocation_failure;
 
     if (level <= 0) level = ZSTD_CLEVEL_DEFAULT;
@@ -693,7 +714,7 @@ sht_status sht_builder_add_text_compressed(
     entry->value.data_block.begin           = compressed;
     entry->value.data_block.length          = compressed_size;
 
-    return sht_status_ok;
+    SAFE_ADD_SUCCESS();
 }
 
 sht_status sht_builder_add_binary_compressed(
@@ -703,7 +724,7 @@ sht_status sht_builder_add_binary_compressed(
     const void*     data,
     int             level
 ) {
-    builder_entry* entry = add_entry(builder, name);
+    builder_entry* entry; SAFE_GET_TOP_ENTRY(entry);
     if (!entry) return sht_status_err_allocation_failure;
 
     if (level <= 0) level = ZSTD_CLEVEL_DEFAULT;
@@ -732,7 +753,7 @@ sht_status sht_builder_add_binary_compressed(
     entry->value.data_block.begin           = compressed;
     entry->value.data_block.length          = compressed_size;
 
-    return sht_status_ok;
+    SAFE_ADD_SUCCESS();
 }
 
 // Lexicographics name comparison for qsort of builder entry objects
@@ -751,7 +772,7 @@ static inline uint64_t entry_data_bytes(builder_entry* entry) {
     } return 0; // unreachable
 }
 
-sht_status sht_builder_serialize(sht_builder* builder, void** out_buffer, size_t* out_bytes) {
+sht_status sht_builder_serialize(sht_builder* builder, void** out_buffer, uint64_t* out_bytes) {
     // Sort by name
     qsort(builder->entries, builder->entries_count, sizeof(builder_entry), name_comp_for_builder_entries);
 

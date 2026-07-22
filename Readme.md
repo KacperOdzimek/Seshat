@@ -6,6 +6,11 @@ Seshat is a lightweight, minimalist binary data format designed to support user-
 
 This repository contains Seshat standard documents in ``formats`` folder, and a C99 single-header-library for seshat read/write inside ``include/seshat``.
 
+# Portability
+
+Format uses uint64 for data sizes - which practically discards 32bit systems.
+The implementation also does not allow 32 bit systmes.
+
 # Versions
 
 | Index | Markdown Document | Changes | Implementations |
