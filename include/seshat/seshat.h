@@ -30,7 +30,8 @@ Notes:
 - Duplicate names error is NOT returned on builder add operations, since this would require
     checking other added names, possibly making add operations time complexity worse. Therefore
     the error is only returned at sht_builder_serialize. This means, adding two entries with same name
-    invalidates the builder. This is not a case worth improving, since it is easy to ensure no duplicates on caller side. 
+    invalidates the builder. This is not a case worth improving, since it is easy to ensure no duplicates on caller side.
+- This api uses null-terminated strings for convenience (seshat files use explicit lengths).
 */
 
 #ifndef SESHAT_H
@@ -99,7 +100,6 @@ sht_status sht_view_query_entry_type(
 );
 
 // Binary search entry by name
-// Name may be not null-terminated
 sht_status sht_view_find(
     sht_view*, const char* name, uint32_t* out
 );
@@ -777,7 +777,8 @@ sht_status sht_builder_serialize(sht_builder* builder, void** out_buffer, size_t
     // Calculate required file size
     uint64_t file_size = align8(32u + builder->entries_count * 24 + name_bytes) + content_bytes;
 
-    uint8_t* result = malloc(file_size);
+    // Alloc with calloc to ensure padding bytes are 0-initialized
+    uint8_t* result = calloc(1, file_size);
     if (!result) return sht_status_err_allocation_failure;
 
     uint64_t position = 0;
