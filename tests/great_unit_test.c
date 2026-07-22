@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 static void test_builder_create_destroy(void) {
     sht_builder* builder = NULL;
@@ -288,7 +289,7 @@ static void test_view_find_existing(void) {
     };
 
     assert(sht_create_view(&view, &info) == sht_status_ok);
-    assert(sht_view_find(view, 5, "hello", &entry) == sht_status_ok);
+    assert(sht_view_find(view, "hello", &entry) == sht_status_ok);
 
     sht_free_view(view);
     free(buffer);
@@ -313,14 +314,113 @@ static void test_view_find_missing(void) {
     };
 
     assert(sht_create_view(&view, &info) == sht_status_ok);
-    assert(sht_view_find(view, 5, "world", &entry) == sht_status_err_not_found);
+    assert(sht_view_find(view, "world", &entry) == sht_status_err_not_found);
 
     sht_free_view(view);
     free(buffer);
     sht_free_builder(builder);
 }
 
-#include <stdio.h>
+static void test_grand_roundtrip(void) {
+    sht_builder* builder = NULL;
+    sht_view* view = NULL;
+    void* buffer = NULL;
+    size_t bytes = 0;
+
+    uint32_t count = 0;
+    uint32_t entry = 0;
+
+    int64_t int_value = 0;
+    double float_value = 0;
+    uint64_t data_bytes = 0;
+    const uint8_t* data_ptr = NULL;
+
+    uint8_t binary[4096];
+    memset(binary, 0x5a, sizeof(binary));
+
+    assert(sht_create_builder(&builder) == sht_status_ok);
+
+    /* Many integer entries */
+    for (int i = 0; i < 100; i++) {
+        char name[32];
+        snprintf(name, sizeof(name), "int_%d", i);
+
+        assert(sht_builder_add_int64(builder, name, i * 1000) == sht_status_ok);
+    }
+
+    /* Many float entries */
+    for (int i = 0; i < 50; i++) {
+        char name[32];
+        snprintf(name, sizeof(name), "float_%d", i);
+
+        assert(sht_builder_add_float64(builder, name, i * 0.5) == sht_status_ok);
+    }
+
+    /* Text entries */
+    const char text1[] = "The quick brown fox jumps over the lazy dog";
+    const char text2[] = "Seshat grand roundtrip test payload";
+
+    assert(sht_builder_add_text(
+        builder,
+        "description",
+        sizeof(text1) - 1,
+        text1,
+        sht_access_make_copy
+    ) == sht_status_ok);
+
+    assert(sht_builder_add_text_compressed(
+        builder,
+        "compressed_text",
+        sizeof(text2) - 1,
+        text2,
+        1
+    ) == sht_status_ok);
+
+    /* Large binary payload */
+    assert(sht_builder_add_binary(
+        builder,
+        "large_binary",
+        sizeof(binary),
+        binary,
+        1
+    ) == sht_status_ok);
+
+    assert(sht_builder_serialize(builder, &buffer, &bytes) == sht_status_ok);
+    assert(buffer != NULL);
+    assert(bytes > 0);
+
+    sht_view_create_info info = {
+        .access = sht_access_read_unowned,
+        .buffer = buffer,
+        .bytes = bytes
+    };
+
+    assert(sht_create_view(&view, &info) == sht_status_ok);
+
+    assert(sht_view_query_entry_count(view, &count) == sht_status_ok);
+    assert(count == 153); /* 100 ints + 50 floats + 3 payloads */
+
+    /* Verify integer entry */
+    assert(sht_view_find(view, "int_42", &entry) == sht_status_ok);
+    assert(sht_view_get_as_int64(view, entry, &int_value) == sht_status_ok);
+    assert(int_value == 42000);
+
+    /* Verify float entry */
+    assert(sht_view_find(view, "float_10", &entry) == sht_status_ok);
+    assert(sht_view_get_as_float64(view, entry, &float_value) == sht_status_ok);
+    assert(float_value == 5.0);
+
+    /* Verify binary payload */
+    assert(sht_view_find(view, "large_binary", &entry) == sht_status_ok);
+    assert(sht_view_get_as_bytes(view, entry, &data_bytes, &data_ptr) == sht_status_ok);
+
+    assert(data_bytes == sizeof(binary));
+    assert(memcmp(data_ptr, binary, sizeof(binary)) == 0);
+
+    sht_free_view(view);
+    free(buffer);
+    sht_free_builder(builder);
+}
 
 void main(void) {
     test_builder_create_destroy();
@@ -342,6 +442,8 @@ void main(void) {
     test_view_query_entry_count();
     test_view_find_existing();
     test_view_find_missing();
+    
+    test_grand_roundtrip();
 
     printf("All good\n");
 }

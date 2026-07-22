@@ -101,7 +101,7 @@ sht_status sht_view_query_entry_type(
 // Binary search entry by name
 // Name may be not null-terminated
 sht_status sht_view_find(
-    sht_view*, uint8_t name_len, const char* name, uint32_t* out
+    sht_view*, const char* name, uint32_t* out
 );
 
 // ===========================
@@ -128,7 +128,7 @@ sht_status sht_view_get_as_uncompressed_size(
 
 // Decompresses a TEXT_compressed / BINARY_compressed entry into a caller-supplied buffer.
 sht_status sht_view_get_as_decompress(
-    sht_view*, uint32_t entry, void* out_buf, uint64_t out_buf_size
+    sht_view*, uint32_t entry, uint64_t out_buf_size, void* out_buf
 );
 
 // ===========================
@@ -421,7 +421,7 @@ sht_status sht_view_query_entry_type(sht_view* viewer, uint32_t entry, sht_type*
 }
  
 // Binary search entry by name (index is guaranteed sorted lexicographically per spec)
-sht_status sht_view_find(sht_view* viewer, uint8_t name_len, const char* name, uint32_t* out) {
+sht_status sht_view_find(sht_view* viewer, const char* name, uint32_t* out) {
     if (!name) return sht_status_err_not_found;
     if (!out)  return sht_status_err_missing_out;
 
@@ -431,7 +431,7 @@ sht_status sht_view_find(sht_view* viewer, uint8_t name_len, const char* name, u
         const uint8_t* mid_name; uint8_t mid_len;
 
         if (!view_get_entry_name(viewer, mid, &mid_name, &mid_len)) return sht_status_err_bad_file;
-        int cmp = name_comp(mid_len, mid_name, name_len, (const uint8_t*)name);
+        int cmp = name_comp(mid_len, mid_name, strlen(name), (const uint8_t*)name);
 
         if (cmp == 0) {
             *out = mid;  return sht_status_ok;
@@ -498,7 +498,7 @@ sht_status sht_view_get_as_uncompressed_size(sht_view* viewer, uint32_t entry, u
 }
  
 // Decompresses fresh into the caller-supplied buffer every call - result is never cached
-sht_status sht_view_get_as_decompress(sht_view* viewer, uint32_t entry, void* out_buf, uint64_t out_buf_size) {
+sht_status sht_view_get_as_decompress(sht_view* viewer, uint32_t entry, uint64_t out_buf_size, void* out_buf) {
     if (!out_buf)                       return sht_status_err_missing_out;  // Ensure out
     if (entry >= viewer->index_count)   return sht_status_err_bad_entry;    // Ensure entry
  
