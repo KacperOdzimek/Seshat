@@ -2,6 +2,42 @@
 
 Seshat is a lightweight, minimalist binary data format designed to support user-defined formats. It provides a simple indexed structure for efficient embedding of arbitrary data blocks, metadata, and binary assets while keeping access predictable and reasonably fast (O(log n)).
 
+# Example
+
+```c
+#define SESHAT_IMPL
+#include "seshat/seshat.h"
+#include <stdio.h>
+#include <stdlib.h>
+
+int main(void) {
+    // Build a document
+    sht_builder* b; sht_create_builder(&b);
+    sht_builder_add_int64(b, "score", 1337);
+    sht_builder_add_text (b, "title", 13, "Hello Seshat", sht_access_read_unowned);
+
+    void* file; uint64_t bytes;
+    sht_builder_serialize(b, &file, &bytes); // Serialize file (possibly for file disc write)
+    sht_free_builder(b);
+
+    // Open a zero-copy view over the serialized buffer
+    sht_view* v; sht_create_view(&v, &(sht_view_create_info){
+        .access = sht_access_claim_ownership,
+        .buffer = file,
+        .bytes  = bytes,
+    });
+
+    // Read entry
+    uint32_t entry; if (sht_view_find(v, "title", &entry) == sht_status_ok) {
+        uint64_t len; const uint8_t* text;
+        sht_view_get_as_bytes(v, entry, &len, &text);
+        printf("%.*s\n", (int)len, (const char*)text);
+    }
+
+    sht_free_view(v);
+}
+```
+
 # Contents
 
 This repository contains Seshat standard documents in ``formats`` folder, and a C99 single-header-library for seshat read/write inside ``include/seshat``.
