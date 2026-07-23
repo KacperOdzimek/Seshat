@@ -33,6 +33,8 @@ Notes:
     invalidates the builder. This is not a case worth improving, since it is easy to ensure no duplicates on caller side.
 - This api uses null-terminated strings for convenience (seshat files use explicit lengths).
 - API requires all strings given to "name" fields to be valid.
+- When reading compressed files from unknown sources, it is caller responsibility 
+    to put a sane limit on uncompressed buffer allocation size.
 */
 
 #ifndef SESHAT_H
@@ -68,15 +70,16 @@ typedef enum sht_status {
     sht_status_err_type_mismatch,       // Bad get operation, entry is not of this type
     sht_status_err_buffer_too_small,    // Buffer is to small to hold decompressed data
     sht_status_err_name_too_long,       // Given name is longer than 255 characters
+    sht_status_err_too_many_entries,    // Index entries count * entry sizeof overflows header index bytes
 } sht_status;
 
 // ===========================
 // Memory access
 
 typedef enum sht_access {
-    sht_access_claim_ownership,         // Given memory is claimed by API, and freed with the object
+    sht_access_make_copy,               // Given memory is copied, and the copy is freed with the object
     sht_access_read_unowned,            // Given memory is read but is not freed with the object
-    sht_access_make_copy                // Given memory is copied, and the copy is freed with the object
+    sht_access_claim_ownership,         // Given memory is claimed by API, and freed with the object
 } sht_access;
 
 // ===========================
@@ -102,6 +105,13 @@ sht_status sht_view_query_entry_type(
     sht_view*, uint32_t entry, sht_type* out_type
 );
 
+// Queries entry at index name
+// Returns pointer to in-file name, zero-copy
+// Name is not null-terminated!
+sht_status sht_view_query_name(
+    sht_view*, uint32_t entry, uint8_t* out_bytes, const char** out_name
+);
+
 // Binary search entry by name
 sht_status sht_view_find(
     sht_view*, const char* name, uint32_t* out
@@ -125,6 +135,7 @@ sht_status sht_view_get_as_bytes(
 );
 
 // Size the output buffer for seshat_entry_decompress
+// See note on limiting uncompressed size
 sht_status sht_view_get_as_uncompressed_size(
     sht_view*, uint32_t entry, uint64_t* out_bytes
 );
@@ -438,6 +449,16 @@ sht_status sht_view_query_entry_type(sht_view* viewer, uint32_t entry, sht_type*
 
     return sht_status_ok;
 }
+
+sht_status sht_view_query_name(
+    sht_view* viewer, uint32_t entry, uint8_t* out_bytes, const char** out_name
+) {
+    if (!out_bytes | !out_name)         return sht_status_err_bad_output;
+    if (entry >= viewer->index_count)   return sht_status_err_bad_entry;
+
+    if (!view_get_entry_name(viewer, entry, (const uint8_t**)out_name, out_bytes)) return sht_status_err_bad_file;
+    return sht_status_ok;
+}
  
 // Binary search entry by name (index is guaranteed sorted lexicographically per spec)
 sht_status sht_view_find(sht_view* viewer, const char* name, uint32_t* out) {
@@ -622,7 +643,7 @@ static inline sht_status top_entry(sht_builder* builder, const char* name, build
         builder->entries_capacity   = new_cap;
     }
 
-    int name_length = strlen(name);
+    size_t name_length = strlen(name);
     if (name_length > 255) return sht_status_err_name_too_long;
 
     builder_entry* entry = &builder->entries[builder->entries_count];
@@ -639,16 +660,16 @@ static inline void top_entry_add(sht_builder* builder) {
     builder->entries_count++; // Make top entry actuall entry
 }
 
-#define SAFE_GET_TOP_ENTRY(entry_out_var) \
-    do {sht_status s = top_entry(builder, name, &entry); if (s != sht_status_ok) return s;} while (0);
+#define SAFE_GET_TOP_ENTRY() \
+    do {sht_status s = top_entry(builder, name, &entry); if (s != sht_status_ok) return s;} while (0)
 
 #define SAFE_ADD_SUCCESS() \
-    top_entry_add(builder); return sht_status_ok
+    do { top_entry_add(builder); return sht_status_ok; } while(0)
 
 sht_status sht_builder_add_int64(
     sht_builder* builder, const char* name, int64_t value
 ) {
-    builder_entry* entry; SAFE_GET_TOP_ENTRY(entry);
+    builder_entry* entry; SAFE_GET_TOP_ENTRY();
     
     entry->type = sht_type_int64;
     entry->value.int64 = value;
@@ -659,7 +680,7 @@ sht_status sht_builder_add_int64(
 sht_status sht_builder_add_float64(
     sht_builder* builder, const char* name, double value
 ) {
-    builder_entry* entry; SAFE_GET_TOP_ENTRY(entry);
+    builder_entry* entry; SAFE_GET_TOP_ENTRY();
     
     entry->type = sht_type_float64;
     entry->value.float64 = value;
@@ -670,7 +691,7 @@ sht_status sht_builder_add_float64(
 sht_status sht_builder_add_text(
     sht_builder* builder, const char* name, uint64_t bytes, const char* text, sht_access access
 ) {
-    builder_entry* entry; SAFE_GET_TOP_ENTRY(entry);
+    builder_entry* entry; SAFE_GET_TOP_ENTRY();
 
     entry->type = sht_type_text;
     sht_status status = link_data_block(entry, bytes, text, access);
@@ -682,7 +703,7 @@ sht_status sht_builder_add_text(
 sht_status sht_builder_add_binary(
     sht_builder* builder, const char* name, uint64_t bytes, const void* data, sht_access access
 ) {
-    builder_entry* entry; SAFE_GET_TOP_ENTRY(entry);
+    builder_entry* entry; SAFE_GET_TOP_ENTRY();
 
     entry->type = sht_type_binary;
     sht_status status = link_data_block(entry, bytes, data, access);
@@ -694,9 +715,9 @@ sht_status sht_builder_add_binary(
 sht_status sht_builder_add_text_compressed(
     sht_builder* builder, const char* name, uint64_t bytes, const char* text, int level
 ) {
-    builder_entry* entry; SAFE_GET_TOP_ENTRY(entry);
+    builder_entry* entry; SAFE_GET_TOP_ENTRY();
 
-    if (level <= 0) level = ZSTD_CLEVEL_DEFAULT;
+    if (level == 0) level = ZSTD_CLEVEL_DEFAULT;
     size_t bound = ZSTD_compressBound((size_t)bytes);
 
     void* compressed = malloc(bound);
@@ -732,7 +753,7 @@ sht_status sht_builder_add_binary_compressed(
     const void*     data,
     int             level
 ) {
-    builder_entry* entry; SAFE_GET_TOP_ENTRY(entry);
+    builder_entry* entry; SAFE_GET_TOP_ENTRY();
 
     if (level <= 0) level = ZSTD_CLEVEL_DEFAULT;
     size_t bound = ZSTD_compressBound((size_t)bytes);
@@ -787,12 +808,13 @@ sht_status sht_builder_serialize(sht_builder* builder, void** out_buffer, uint64
     qsort(builder->entries, builder->entries_count, sizeof(builder_entry), name_comp_for_builder_entries);
 
     // Ensure no names are equal, calculate names size, calculate content bytes
-    uint64_t name_bytes = 0; uint64_t content_bytes = 0;
-
+    uint32_t name_bytes = 0; uint64_t content_bytes = 0;
     for (uint32_t i = 0; i < builder->entries_count; ++i) {
         builder_entry* curr = &builder->entries[i];
 
-        name_bytes    += 1 + curr->name_length;
+        if (name_bytes + 1 + curr->name_length <= name_bytes) return sht_status_err_too_many_entries;    // Overflow check
+        name_bytes += 1 + curr->name_length;
+
         content_bytes =  align8(content_bytes);   // Spec: each content starts at 8-byte alignment
         content_bytes += entry_data_bytes(curr);
 
@@ -805,8 +827,12 @@ sht_status sht_builder_serialize(sht_builder* builder, void** out_buffer, uint64
         }
     }
 
+    // Calculate index bytes
+    uint64_t index_bytes = (uint64_t)builder->entries_count * 24;
+    if (index_bytes > UINT32_MAX) return sht_status_err_too_many_entries;
+
     // Calculate required file size
-    uint64_t file_size = align8(32u + builder->entries_count * 24 + name_bytes) + content_bytes;
+    uint64_t file_size = align8((uint64_t)32u + index_bytes + name_bytes) + content_bytes;
 
     // Alloc with calloc to ensure padding bytes are 0-initialized
     uint8_t* result = calloc(1, file_size);
@@ -817,8 +843,8 @@ sht_status sht_builder_serialize(sht_builder* builder, void** out_buffer, uint64
     // Write header
     write_bytes(result, &position, MAGIC_VALUE, 8);
     write_le64(result,  &position, 0); // Version
-    write_le32(result,  &position, builder->entries_count * 24);
-    write_le32(result,  &position, (uint32_t)name_bytes);
+    write_le32(result,  &position, index_bytes);
+    write_le32(result,  &position, name_bytes);
     write_le64(result,  &position, content_bytes);
 
     // Write index

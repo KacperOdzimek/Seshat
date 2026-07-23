@@ -422,6 +422,35 @@ static void test_grand_roundtrip(void) {
     sht_free_builder(builder);
 }
 
+static void test_view_query_name(void) {
+    sht_builder* builder = NULL;
+    sht_view* view = NULL;
+    void* buffer = NULL;
+    size_t bytes = 0;
+
+    uint8_t name_bytes = 0;
+    const char* name = NULL;
+
+    assert(sht_create_builder(&builder) == sht_status_ok);
+    assert(sht_builder_add_int64(builder, "hello", 123) == sht_status_ok);
+    assert(sht_builder_serialize(builder, &buffer, &bytes) == sht_status_ok);
+
+    sht_view_create_info info = {
+        .access = sht_access_read_unowned,
+        .buffer = buffer,
+        .bytes = bytes
+    };
+
+    assert(sht_create_view(&view, &info) == sht_status_ok);
+    assert(sht_view_query_name(view, 0, &name_bytes, &name) == sht_status_ok);
+    assert(name_bytes == 5);
+    assert(memcmp(name, "hello", name_bytes) == 0);
+
+    sht_free_view(view);
+    free(buffer);
+    sht_free_builder(builder);
+}
+
 void main(void) {
     test_builder_create_destroy();
     test_builder_add_int64();
@@ -444,6 +473,7 @@ void main(void) {
     test_view_find_missing();
     
     test_grand_roundtrip();
+    test_view_query_name();
 
     printf("All good\n");
 }
